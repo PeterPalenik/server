@@ -1807,9 +1807,7 @@ class StreamsAudio:
             track_playback_speed = cast(
                 "float", queue_track.extra_attributes.get("playback_speed", 1.0)
             )
-            play_log_entry = PlayLogEntry(
-                queue_track.queue_item_id, playback_speed=track_playback_speed
-            )
+            play_log_entry = PlayLogEntry(queue_track.queue_item_id)
             queue.flow_mode_stream_log.append(play_log_entry)
             # calculate crossfade buffer size
             crossfade_buffer_duration = (

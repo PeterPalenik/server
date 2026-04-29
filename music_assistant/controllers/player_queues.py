@@ -505,6 +505,11 @@ class PlayerQueuesController(CoreController):
         # mirror onto the queue so corrected_elapsed_time advances in media-time
         # immediately, before the next on_player_elapsed_time_corrected snapshot.
         if queue.current_item and queue.current_item.queue_item_id == queue_item_id:
+            # close off the wallclock seconds that already ticked by at the old speed
+            # before switching, so corrected_elapsed_time doesn't multiply them by the new speed
+            if queue.state == PlaybackState.PLAYING:
+                queue.elapsed_time = queue.corrected_elapsed_time
+                queue.elapsed_time_last_updated = time.time()
             queue.playback_speed = speed
         self.signal_update(queue_id)
         if queue.state == PlaybackState.PLAYING:
@@ -2917,8 +2922,8 @@ class PlayerQueuesController(CoreController):
         """Calculate current queue index and current track elapsed time when flow mode is active.
 
         The player reports cumulative stream-time (post-atempo). The returned
-        track elapsed time is in media-time, scaled by each playlog entry's
-        recorded playback_speed.
+        track elapsed time is in media-time, scaled by the current item's
+        playback_speed when we hit the active entry.
         """
         elapsed_time_queue_total = player.state.corrected_elapsed_time or 0
         if queue.current_index is None and not queue.flow_mode_stream_log:
@@ -2934,14 +2939,12 @@ class PlayerQueuesController(CoreController):
         queue_index: int | None = queue.current_index or 0
         track_time = 0.0
         for play_log_entry in queue.flow_mode_stream_log:
-            entry_speed = play_log_entry.playback_speed or 1.0
-            # Compare against the player's cumulative stream-time. seconds_streamed
-            # is already stream-time; duration is media-time, so divide by speed.
+            # seconds_streamed is bytes-derived stream-time, so the boundary check
+            # doesn't need a speed factor. Only the still-streaming tail entry has
+            # seconds_streamed=None; we'll break inside it before the sentinel matters.
             if play_log_entry.seconds_streamed is not None:
                 # NOTE: 'seconds_streamed' can be 0 if there was a stream error
                 entry_stream_duration = play_log_entry.seconds_streamed
-            elif play_log_entry.duration:
-                entry_stream_duration = play_log_entry.duration / entry_speed
             else:
                 entry_stream_duration = 3600 * 24 * 7
             if elapsed_time_queue_total > (entry_stream_duration + played_time):
@@ -2957,9 +2960,12 @@ class PlayerQueuesController(CoreController):
                     track_sec_skipped = queue_item.streamdetails.seek_position
                 else:
                     track_sec_skipped = 0
-                # stream-time within this entry, scaled to media-time
+                # stream-time within this entry, scaled to media-time using the
+                # current item's speed (the entry we break on is always current_item)
                 stream_pos_in_item = elapsed_time_queue_total - played_time
-                track_time = track_sec_skipped + stream_pos_in_item * entry_speed
+                track_time = track_sec_skipped + stream_pos_in_item * self._current_playback_speed(
+                    queue
+                )
                 break
         if player.state.playback_state != PlaybackState.PLAYING:
             # if the player is not playing, we can't be sure that the elapsed time is correct
